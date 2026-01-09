@@ -14,9 +14,6 @@ use std::sync::Mutex;
 use std::time::Instant;
 use walkdir::WalkDir;
 
-/// Global lock to protect stdout redirection and PDF extraction.
-/// Rationale: gag::Gag redirects process-wide stdout, which is not thread-local.
-/// Locking avoids concurrency artifacts in parallel runs.
 static PDF_EXTRACT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static SILENCE_PANICS: Lazy<std::sync::atomic::AtomicBool> =
     Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
@@ -34,19 +31,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Search files by name/content
     Search(SearchArgs),
 
-    /// Create a sample config file
     ConfigInit {
-        /// Where to write config (default: ./rustfilefinder.toml)
         #[arg(long)]
         path: Option<PathBuf>,
     },
 
-    /// List presets from config
     Presets {
-        /// Config path (default: ./rustfilefinder.toml or user config dir)
         #[arg(long)]
         config: Option<PathBuf>,
     },
@@ -54,47 +46,36 @@ enum Commands {
 
 #[derive(Parser, Debug, Clone)]
 struct SearchArgs {
-    /// Config path (optional)
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Preset name from config
     #[arg(long)]
     preset: Option<String>,
 
-    /// Base directory to search (default: current directory)
     #[arg(long, default_value = ".")]
     dir: PathBuf,
 
-    /// Enable searching inside PDF files (text extraction)
     #[arg(long, default_value_t = false)]
     include_pdf: bool,
 
-    /// Part of the filename to match (case-insensitive)
     #[arg(long)]
     name: Option<String>,
 
-    /// Regex to search inside text files (UTF-8). Example: "(?i)error|fail"
     #[arg(long)]
     content: Option<String>,
 
-    /// Output format: "md" or "json"
     #[arg(long, default_value = "md")]
     format: String,
 
-    /// Max file size to read for content search (in bytes) [TEXT ONLY]
     #[arg(long, default_value_t = 2_000_000)]
     max_bytes: u64,
 
-    /// Comma-separated list of allowed extensions (e.g., "txt,rs,md" or "pdf")
     #[arg(long)]
     ext: Option<String>,
 
-    /// Maximum number of matches to print (helps demos). If omitted, prints all.
     #[arg(long)]
     limit: Option<usize>,
 
-    /// Print debug information (e.g., unreadable PDFs)
     #[arg(long, default_value_t = false)]
     verbose: bool,
 }
@@ -137,30 +118,25 @@ struct Counters<'a> {
 
 #[derive(Serialize, Debug, Clone)]
 struct RunStats {
-    // discovery
     files_discovered: usize,
 
-    // scanning (split: text vs pdf)
     files_scanned_text: usize,
     files_scanned_pdf: usize,
 
-    // skipped
-    files_skipped_non_text: usize, // non-text (when content search is enabled)
-    files_skipped_too_large: usize, // text files only
-    files_skipped_non_utf8: usize, // text files only
+    files_skipped_non_text: usize,
+    files_skipped_too_large: usize,
+    files_skipped_non_utf8: usize,
 
-    // unreadable (split)
     files_skipped_unreadable_text: usize,
     files_skipped_unreadable_pdf: usize,
 
-    // matches & time
     matches_total: usize,
     matches_printed: usize,
     elapsed_ms: u128,
 }
 
 fn main() {
-    // seu hook atual (pode manter igual)
+
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if !SILENCE_PANICS.load(Ordering::Relaxed) {
@@ -196,7 +172,6 @@ fn main() {
             let cfg = cfg_path.as_deref().and_then(load_config);
             args = merge_search_args(args, cfg);
 
-            // validação mínima
             if args.name.is_none() && args.content.is_none() {
                 eprintln!("Error: you must provide at least --name or --content");
                 std::process::exit(2);
@@ -222,7 +197,6 @@ fn run_search(args: SearchArgs, started: Instant) {
             .collect()
     });
 
-    // 1) Collect file paths
     let files: Vec<PathBuf> = WalkDir::new(&args.dir)
         .follow_links(false)
         .into_iter()
@@ -235,7 +209,6 @@ fn run_search(args: SearchArgs, started: Instant) {
 
     let files_discovered = files.len();
 
-    // counters (iguais aos seus)
     let scanned_text = AtomicUsize::new(0);
     let scanned_pdf = AtomicUsize::new(0);
 
@@ -256,7 +229,6 @@ fn run_search(args: SearchArgs, started: Instant) {
         skipped_unreadable_pdf: &skipped_unreadable_pdf,
     };
 
-    // 2) Analyze in parallel
     let mut results: Vec<MatchResult> = files
         .par_iter()
         .filter_map(|path| {
@@ -334,7 +306,6 @@ fn run_search(args: SearchArgs, started: Instant) {
             println!("{json}");
         }
         _ => {
-            // ATENÇÃO: sua print_markdown hoje recebe &Args; mude para receber &SearchArgs
             print_markdown(&args, &stats, &results_print);
         }
     }
@@ -370,7 +341,6 @@ fn analyze_file(
     if let Some(re) = content_re {
         let pdf = is_pdf(path);
 
-        // If user did NOT specify --ext, restrict content scanning to "probably text" OR PDF (when enabled)
         if allowed_ext.is_none() {
             if pdf {
                 if !include_pdf {
@@ -382,7 +352,6 @@ fn analyze_file(
                 return some_if_name_only(path, name_query, matched_name);
             }
         } else {
-            // If --ext is specified and the file is pdf, require include_pdf to actually search inside it
             if pdf && !include_pdf {
                 counters.skipped_non_text.fetch_add(1, Ordering::Relaxed);
                 return some_if_name_only(path, name_query, matched_name);
@@ -390,10 +359,8 @@ fn analyze_file(
         }
 
         if pdf {
-            // PDF path: extract text then regex (silence noisy stdout/stderr + silence panics)
             counters.scanned_pdf.fetch_add(1, Ordering::Relaxed);
 
-            // Important: gag redirects process-wide stdout/stderr, so avoid concurrent redirections.
             let _lock = match PDF_EXTRACT_LOCK.lock() {
                 Ok(g) => g,
                 Err(_) => {
@@ -432,7 +399,6 @@ fn analyze_file(
                 snippet = Some(snippet_around_match(&pdf_text, m.start(), m.end(), 40, 120));
             }
         } else {
-            // TEXT path (size guard + UTF-8)
             let meta = match fs::metadata(path) {
                 Ok(v) => v,
                 Err(_) => {
@@ -642,7 +608,6 @@ fn snippet_around_match(
     context: usize,
     max_chars: usize,
 ) -> String {
-    // m_start/m_end are byte offsets from regex::Match
     let start = m_start.saturating_sub(context);
     let end = (m_end + context).min(s.len());
 
