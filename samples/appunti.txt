@@ -1,0 +1,9 @@
+﻿Appunti – Linguaggi di Programmazione (esempio)
+
+- Un linguaggio di programmazione definisce sintassi e semantica di un insieme di costrutti.
+- Concetti chiave: tipi statici vs dinamici, scoping lessicale, funzioni di ordine superiore,
+  gestione della memoria (stack/heap), e modelli di esecuzione (compilazione vs interpretazione).
+- Rust mette enfasi su ownership e borrow checking per garantire sicurezza della memoria.
+- Python è un linguaggio interpretato con tipizzazione dinamica.
+
+Parole utili per test: compilatore, semantica, tipi, runtime, Rust, Python.

@@ -1,0 +1,13 @@
+﻿[presets.demo_text]
+dir = "samples"
+include_pdf = false
+ext = "txt,md"
+content = "(?i)compilatore|interprete|semantica|tipi|rust|python"
+format = "json"
+
+[presets.demo_pdf]
+dir = "samples_pdf"
+include_pdf = true
+ext = "pdf"
+content = "(?i)compilatore|interprete|semantica|tipi|rust|python"
+format = "json"
